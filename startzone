@@ -30,7 +30,8 @@ eingabePunkte = 'ZufallPunkteBev_PLZJOIN'
 # geo1 = arcpy.Geometry()
 # eingabeListeMittelpunkt = arcpy.CopyFeatures_management('UniStandorte', geo1)
 zielorte = 'UniStandorte'
-entfernungMax = [500, 1000, 2500, 5000, 10000, 20000]
+# entfernungMax = [500, 1000, 2500, 5000, 10000, 20000]
+distanzenListe = [0, 500, 1000, 2500, 5000, 10000, 20000]
 # entfernungMin besser in Abhaengigkeit von entfernungMax definieren? Also Listenelement Index [-1]?
 entfernungMin = [0, 500, 1000, 2500, 5000, 10000]
 # ausgabePunkte = str(eingabeMittelpunkt) + str(entfernungMax)
@@ -72,21 +73,26 @@ try:
         # UniStandort als Ziel in NW Layer importieren
         arcpy.na.AddLocations(ODMatrix, 'destinations', mittelpunkt, '', '', 'clear', 'snap', '', '', '')
         # iteration durch alle Abstandsstreifen (Ringe)
-        for obereGrenze in entfernungMax:
+        Zaehler = 1
+        while Zaehler < len(distanzenListe):
+            obereGrenze = distanzenListe[Zaehler]
+            untereGrenze = distanzenListe[Zaehler-1]
             arcpy.SelectLayerByLocation_management(eingabePunkte, 'within_a_distance', mittelpunkt, obereGrenze, 'new_selection', '')
-            for untereGrenze in entfernungMin:
-                arcpy.SelectLayerByLocation_management(eingabePunkte, 'within_a_distance', mittelpunkt, untereGrenze, 'remove_from_current_selection', '')
-                # abfrage, ob denn Punkte ausgewählt wurden oder die Auswahl leer ist
-                desc = arcpy.Describe(eingabePunkte)
-                if len(desc.FIDSet) > 0:  # layer has selection
-                    arcpy.CopyFeatures_management(eingabePunkte, auswahlBufferPunkte,)
-                    # erstellen einer Liste mit allen vorkommenden PLZ (unique values) in der Auswahl
-                    plzListe = [unique_values(auswahlBufferPunkte, 'eindeutigePLZ')]
-                    # iteration durch alle Postleitzahlen
-                    for PLZ in plzListe:
-                        arcpy.SelectLayerByAttribute_management(auswahlBufferPunkte,'new_selection', " [eindeutigePLZ] = PLZ", '')
-                        print('Auswahl von ' + str(PLZ) + ' im Abstand von ' + str(untereGrenze) + ' bis ' + str(obereGrenze))
-                        # toDo: wird das Werkzeug nur auf die Auswahl ausgefuehrt oder auf den ganzen Layer? Eindeutige Loesing: copy features.
+            arcpy.SelectLayerByLocation_management(eingabePunkte, 'within_a_distance', mittelpunkt, untereGrenze, 'remove_from_current_selection', '')
+            # abfrage, ob denn Punkte ausgewaehlt wurden oder ob die Auswahl leer ist
+            desc = arcpy.Describe(eingabePunkte)
+            if len(desc.FIDSet) > 0:  # layer has selection
+                arcpy.CopyFeatures_management(eingabePunkte, auswahlBufferPunkte,)
+                # erstellen einer Liste mit allen vorkommenden PLZ (unique values) in der Auswahl
+                plzListe = [unique_values(auswahlBufferPunkte, 'eindeutigePLZ')]
+                # iteration durch alle Postleitzahlen
+                for PLZ in plzListe:
+                    arcpy.SelectLayerByAttribute_management(auswahlBufferPunkte, 'new_selection', " [eindeutigePLZ] = PLZ", '')
+                    auswahlZaehler = arcpy.GetCount_management(auswahlBufferPunkte)
+                    if auswahlZaehler > 0:
+                        print('In der Auswahl von ' + str(mittelpunktName) + str(PLZ) + ' im Abstand von ' + str(untereGrenze) + ' bis ' + str(obereGrenze) + ' sind ' + str(auswahlZaehler) + ' Punkte enhalten')
+                        # laut dokumentation  wird das Werkzeug nur auf die Auswahl ausgefuehrt
+                        # https://pro.arcgis.com/de/pro-app/tool-reference/data-management/select-layer-by-attribute.htm
                         # jetzt wirds kompliziert: Ausführen der OD CostMatrix und schreiben der Ergebnisse in Liste
                         arcpy.na.AddLocations(ODMatrix, 'origins', auswahlBufferPunkte, '', '', 'clear', 'snap', '', '', '')
                         # den NA Layer loesen
@@ -108,7 +114,10 @@ try:
                         del new_row
                         del identifier
                     else:
-                        print('Keine Punkte fuer ' + str(mittelpunktName) + ' zwischen ' + str(entfernungMin) + ' und ' + str(entfernungMax) + ' vorhanden.')
+                        print('Die Auswahl von ' + str(mittelpunktName) + str(PLZ) + ' im Abstand von ' + str(untereGrenze) + ' bis ' + str(obereGrenze) + ' ist mit [' + str(auswahlZaehler) + '] Punkten leer')
+            else:
+                print('Keine Punkte fuer ' + str(mittelpunktName) + ' zwischen ' + str(entfernungMin) + ' und ' + str(entfernungMax) + ' vorhanden.')
+        Zaehler = Zaehler+1
 except:
     print('Das lief schief')
 
