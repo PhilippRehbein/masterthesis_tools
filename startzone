@@ -24,7 +24,7 @@ arcpy.env.parallelProcessingFactor = '80'
 
 # Variablen
 
-eingabePunkte = 'ZufallPunkteBev_PLZJOIN'
+eingabePunkte = 'BevDichteOe_PLZ'
 # Unistandorte muss noch in Liste umgewandelt werden
 # leere Geometie um die Unistandorte als Liste zu speichern
 # geo1 = arcpy.Geometry()
@@ -38,15 +38,15 @@ entfernungMin = [0, 500, 1000, 2500, 5000, 10000]
 koordinatensystem = arcpy.Describe(eingabePunkte).spatialReference
 auswahlBufferPunkte = r'memory\ausgabePunkte'
 netzwerk = 'Network'
-ODMatrix = 'ODCostMatrix'
+ODMatrix = 'OD Cost Matrix'
 wiederstand = 'DriveTime'
-accumulate_attribute_name = 'Sicherheitsindex'
+accumulate_attribute_name = 'Index'
 ausgabeLayer = r'memory\temp_ausgabeLayer'
-ergebnisseFC = os.path.join(ausgabeGDB, 'ergebnisseZusammenfassung')
+ergebnisseFC = os.path.join(ausgabeGDB, 'ergebnisse')
 temp_ausgabeStatistic = r'memory\temp_augabeStatistic'
 ausgabeFelder = ['meanWS'] # toDo nur meanWS?
 statistikTyp = 'SUM'
-felder_ic_cursor = [feldstatistik, ausgabeFelder, identifier]
+
 # Funktionen
 
 #
@@ -57,90 +57,76 @@ def unique_values(table, field):  ##uses list comprehension
 
 # https://pro.arcgis.com/de/pro-app/tool-reference/network-analyst/make-od-cost-matrix-layer.htm
 # eventuell könnte man den Sicherheitsindex als Hirarchy Attribut verwenden. Dann werden sichere Straßen bevorzugt
-arcpy.na.MakeODCostMatrixLayer(netzwerk, ODMatrix, wiederstand, '', '', accumulate_attribute_name, '', '', '', '')
+# arcpy.na.MakeODCostMatrixLayer(netzwerk, ODMatrix, wiederstand, '', '', accumulate_attribute_name, '', '', '', '')
 # leere Ausgabe erstellen um die Ergebnisse zu sammeln und mit Insert Cursor zu befuellen
-ergebnisseFC = arcpy.CreateFeatureclass_management(ausgabeGDB, ergebnisseFC, '', '', '', '', koordinatensystem)
-# cursor erstellen um Ergebnisse in einer Datei zu speichern
-zeigerErgebnisse = arcpy.da.InsertCursor(ergebnisseFC, feldstatistik)
+ergebnisseFC = arcpy.CreateFeatureclass_management(ausgabeGDB, 'ergebnisse', '', '', '', '', '', '', '', '', '', '')
+
 # cursor erstellen um durch die Zielorte zu iterieren
 zeigerZielorte = arcpy.da.SearchCursor(zielorte, '*' )
 
-try:
-    # iteration durch alle Unistandorte
-    for mittelpunkt in zeigerZielorte:
-        #Name UniStandort abfragen fuer spateren Identifier
-        mittelpunktName = mittelpunkt.getValue(['Name'])
-        # UniStandort als Ziel in NW Layer importieren
-        arcpy.na.AddLocations(ODMatrix, 'destinations', mittelpunkt, '', '', 'clear', 'snap', '', '', '')
-        # iteration durch alle Abstandsstreifen (Ringe)
-        Zaehler = 1
-        while Zaehler < len(distanzenListe):
-            obereGrenze = distanzenListe[Zaehler]
-            untereGrenze = distanzenListe[Zaehler-1]
-            arcpy.SelectLayerByLocation_management(eingabePunkte, 'within_a_distance', mittelpunkt, obereGrenze, 'new_selection', '')
-            arcpy.SelectLayerByLocation_management(eingabePunkte, 'within_a_distance', mittelpunkt, untereGrenze, 'remove_from_current_selection', '')
-            # abfrage, ob denn Punkte ausgewaehlt wurden oder ob die Auswahl leer ist
-            desc = arcpy.Describe(eingabePunkte)
-            if len(desc.FIDSet) > 0:  # layer has selection
-                arcpy.CopyFeatures_management(eingabePunkte, auswahlBufferPunkte,)
-                # erstellen einer Liste mit allen vorkommenden PLZ (unique values) in der Auswahl
-                plzListe = [unique_values(auswahlBufferPunkte, 'eindeutigePLZ')]
-                # iteration durch alle Postleitzahlen
-                for PLZ in plzListe:
-                    arcpy.SelectLayerByAttribute_management(auswahlBufferPunkte, 'new_selection', " [eindeutigePLZ] = PLZ", '')
-                    auswahlZaehler = arcpy.GetCount_management(auswahlBufferPunkte)
-                    if auswahlZaehler > 0:
-                        print('In der Auswahl von ' + str(mittelpunktName) + str(PLZ) + ' im Abstand von ' + str(untereGrenze) + ' bis ' + str(obereGrenze) + ' sind ' + str(auswahlZaehler) + ' Punkte enhalten')
-                        # laut dokumentation  wird das Werkzeug nur auf die Auswahl ausgefuehrt
-                        # https://pro.arcgis.com/de/pro-app/tool-reference/data-management/select-layer-by-attribute.htm
-                        # jetzt wirds kompliziert: Ausführen der OD CostMatrix und schreiben der Ergebnisse in Liste
-                        arcpy.na.AddLocations(ODMatrix, 'origins', auswahlBufferPunkte, '', '', 'clear', 'snap', '', '', '')
-                        # den NA Layer loesen
-                        arcpy.na.Solve(ODMatrix)
-                        # Layer Lines auswaehlen
-                        Selection = arcpy.SelectData_management(ODMatrix, "Lines")
-                        # Kopie erstellen
-                        arcpy.CopyFeatures_management(ODMatrix, ausgabeLayer)
-                        # berechnung durchschnittlicher Wiederstand
-                        arcpy.AddField_management(ausgabeLayer, 'meanWS', 'DOUBLE', '', '', '', 'meanWiederstand', '', '', '')
-                        arcpy.CalculateFields_management(ausgabeLayer, 'PYTHON3', ['meanWS', 'Total_INDEX'/'Total_Length'])
-                        # Feldstatistik auf durchschnittlichen Wiederstand anwenden
-                        feldstatistik = arcpy.SummarizeAttributes_geoanalytics(ausgabeLayer, temp_ausgabeStatistic, [[ausgabeFelder, statistikTyp]])
-                        # identifier fuer spaetere Zuordnung basteln
-                        identifier = str(PLZ)+'_' + str(obereGrenze)+ '_' +str(mittelpunktName)
-                        # Ergebnisse in Tabelle schreiben
-                        new_row = [felder_ic_cursor]
-                        zeigerErgebnisse.insertRow(new_row)
-                        del new_row
-                        del identifier
-                    else:
-                        print('Die Auswahl von ' + str(mittelpunktName) + str(PLZ) + ' im Abstand von ' + str(untereGrenze) + ' bis ' + str(obereGrenze) + ' ist mit [' + str(auswahlZaehler) + '] Punkten leer')
-            else:
-                print('Keine Punkte fuer ' + str(mittelpunktName) + ' zwischen ' + str(entfernungMin) + ' und ' + str(entfernungMax) + ' vorhanden.')
-        Zaehler = Zaehler+1
-except:
+#try:
+# iteration durch alle Unistandorte
+for mittelpunkt in zeigerZielorte:
+    #Name UniStandort abfragen fuer spateren Identifier
+    mittelpunktName = mittelpunkt.getValue(['Name'])
+    # UniStandort als Ziel in NW Layer importieren
+    arcpy.na.AddLocations(ODMatrix, 'destinations', mittelpunkt, '', '', 'clear', 'snap', '', '', '')
+    print('Zielort '+str(mittelpunktName) + ' hinzugefuegt')
+    # iteration durch alle Abstandsstreifen (Ringe)
+    Zaehler = 1
+    while Zaehler < len(distanzenListe):
+        print('Verarbeitungsrunde' + str(Zaehler))
+        obereGrenze = distanzenListe[Zaehler]
+        untereGrenze = distanzenListe[Zaehler-1]
+        arcpy.SelectLayerByLocation_management(eingabePunkte, 'within_a_distance', mittelpunkt, obereGrenze, 'new_selection', '')
+        print('Obere Auswahl getroffen:' + str(obereGrenze))
+        arcpy.SelectLayerByLocation_management(eingabePunkte, 'within_a_distance', mittelpunkt, untereGrenze, 'remove_from_current_selection', '')
+        print('Untere Auswahl entfernt:' + str(untereGrenze))
+        # abfrage, ob denn Punkte ausgewaehlt wurden oder ob die Auswahl leer ist
+        beschreibung = arcpy.Describe(eingabePunkte)
+        if len(beschreibung.FIDSet) > 0:  # layer has selection
+            print('Die Auswahl enthaelt Punkte')
+            arcpy.CopyFeatures_management(eingabePunkte, auswahlBufferPunkte)
+            # erstellen einer Liste mit allen vorkommenden PLZ (unique values) in der Auswahl
+            plzListe = [unique_values(auswahlBufferPunkte, 'eindeutigePLZ')]
+            print('Die PLZ '+str(plzListe)+' werden verarbeitet')
+            # iteration durch alle Postleitzahlen
+            for PLZ in plzListe:
+                arcpy.SelectLayerByAttribute_management(auswahlBufferPunkte, 'new_selection', " [eindeutigePLZ] = PLZ", '')
+                auswahlZaehler = arcpy.GetCount_management(auswahlBufferPunkte)
+                if auswahlZaehler > 0:
+                    print('In der Auswahl von ' + str(mittelpunktName) + str(PLZ) + ' im Abstand von ' + str(untereGrenze) + ' bis ' + str(obereGrenze) + ' sind ' + str(auswahlZaehler) + ' Punkte enhalten')
+                    # laut dokumentation  wird das Werkzeug nur auf die Auswahl ausgefuehrt
+                    # https://pro.arcgis.com/de/pro-app/tool-reference/data-management/select-layer-by-attribute.htm
+                    # jetzt wirds kompliziert: Ausführen der OD CostMatrix und schreiben der Ergebnisse in Liste
+                    arcpy.na.AddLocations(ODMatrix, 'origins', auswahlBufferPunkte, '', '', 'clear', 'snap', '', '', '')
+                    # den NA Layer loesen
+                    arcpy.na.Solve(ODMatrix)
+                    # Layer Lines auswaehlen
+                    Selection = arcpy.SelectData_management(ODMatrix, "Lines")
+                    # Kopie erstellen
+                    arcpy.CopyFeatures_management(ODMatrix, ausgabeLayer)
+                    # berechnung durchschnittlicher Wiederstand
+                    arcpy.AddField_management(ausgabeLayer, 'meanWS', 'DOUBLE', '', '', '', 'meanWiederstand', '', '', '')
+                    arcpy.CalculateFields_management(ausgabeLayer, 'PYTHON3', ['meanWS', 'Total_INDEX'/'Total_Length'])
+                    # Feldstatistik auf durchschnittlichen Wiederstand anwenden
+                    feldstatistik = arcpy.SummarizeAttributes_geoanalytics(ausgabeLayer, temp_ausgabeStatistic, [[ausgabeFelder, statistikTyp]])
+                    # identifier fuer spaetere Zuordnung basteln
+                    identifier = str(PLZ)+'_' + str(obereGrenze)+ '_' +str(mittelpunktName)
+                    # cursor erstellen um Ergebnisse in einer Datei zu speichern
+                    zeigerErgebnisse = arcpy.da.InsertCursor(ergebnisseFC, feldstatistik)
+                    # Ergebnisse in Tabelle schreiben
+                    felder_ic_cursor = [feldstatistik, ausgabeFelder, identifier]
+                    new_row = [felder_ic_cursor]
+                    zeigerErgebnisse.insertRow(new_row)
+                    del new_row
+                    del identifier
+                else:
+                    print('Die Auswahl von ' + str(mittelpunktName) + str(PLZ) + ' im Abstand von ' + str(untereGrenze) + ' bis ' + str(obereGrenze) + ' ist mit [' + str(auswahlZaehler) + '] Punkten leer')
+        else:
+            print('Keine Punkte fuer ' + str(mittelpunktName) + ' zwischen ' + str(untereGrenze) + ' und ' + str(obereGrenze) + ' vorhanden.')
+    Zaehler = Zaehler+1
+#except:
     print('Das lief schief')
 
 
-
-
-
-"""
-# Variablen
-eingabeZielorteFC = 'UniStandorte'
-# ausgabeBufferFC = 'Entfernungsbaender'
-ausgabeHomezoneFC = 'Homezone'
-#Distanzen in Metern
-distanzen = [500, 1000, 2500, 5000, 10000, 20000, 50000, 100000]
-# ergebnisseFC = os.path.join(arcpy.env.workspace, 'testlauf' + '.shp')
-
-
-#IM Ergbnis sollen Ringe um die jeweiligen UNiStandorte gebildet werden. Daher MultiringBuffer mit Dissolve. Es sollen aber unabhängige Ringe um den jeweiligen UniStandort entstehen. SChleife Notwendig.
-sc_rows = arcpy.SearchCursor(eingabeZielorteFC)
-for sc_row in sc_rows:
-    ausgabeBufferFC = sc_row.getValue('Einrichtung') + 'Puffer'
-    arcpy.MultipleRingBuffer_analysis(sc_rows, ausgabeBufferFC, distanzen, '', '', '', '')
-
-#arcpy.Intersect_analysis([ausgabeBufferFC, )
-
-"""
