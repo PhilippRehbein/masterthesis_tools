@@ -14,119 +14,172 @@
 import arcpy
 #import sys
 import os
+import numpy as np
+import pandas as pd
 
 print('Verarbeitung startet')
 # Umgebungseinstellungen
-arcpy.env.workspace = r'C:\Users\Matthias\Documents\UNIGIS\Masterthesis\GIS_Projekt\eingangsDaten.gdb'
-ausgabeGDB = r'C:\Users\Matthias\Documents\UNIGIS\Masterthesis\GIS_Projekt\ergebnisseHomezone.gdb'
+
+arcpy.env.workspace = r'C:\Users\Matthias\Documents\UNIGIS\Masterthesis\GIS_Projekt\Zielorte.gdb'
+listeZielorte = arcpy.ListFeatureClasses()
+#arcpy.env.workspace = r'C:\Users\Matthias\Documents\UNIGIS\Masterthesis\GIS_Projekt\arbeitsverzeichnis.gdb'
 arcpy.env.overwriteOutput = 1
-arcpy.env.parallelProcessingFactor = '80'
+arcpy.env.parallelProcessingFactor = '100%'
+pd.options.display.width = 0
 
 # Variablen
+eingabeGDB = r'C:\Users\Matthias\Documents\UNIGIS\Masterthesis\GIS_Projekt\eingangsDaten.gdb'
+ausgabeGDB = r'C:\Users\Matthias\Documents\UNIGIS\Masterthesis\GIS_Projekt\ergebnisseHomezone.gdb'
+arbeitsverzeichnis = r'C:\Users\Matthias\Documents\UNIGIS\Masterthesis\GIS_Projekt\arbeitsverzeichnis.gdb'
 
-eingabePunkte = 'BevDichteOe_PLZ'
+eingabePunkte = os.path.join(eingabeGDB,'BevDichteOe_PLZ')
 # Unistandorte muss noch in Liste umgewandelt werden
 # leere Geometie um die Unistandorte als Liste zu speichern
 # geo1 = arcpy.Geometry()
 # eingabeListeMittelpunkt = arcpy.CopyFeatures_management('UniStandorte', geo1)
-zielorte = 'UniStandorte'
+# zielorte = os.path.join(eingabeGDB,'UniStandorte')
+zielorte = r'C:\Users\Matthias\Documents\UNIGIS\Masterthesis\GIS_Projekt\eingangsDaten.gdb\UniStandorte'
+zielorteTV = r'C:\Users\Matthias\Documents\UNIGIS\Masterthesis\GIS_Projekt\eingangsDaten.gdb\UniStandorte'
 # entfernungMax = [500, 1000, 2500, 5000, 10000, 20000]
-distanzenListe = [0, 500, 1000, 2500, 5000, 10000, 20000]
+distanzenListe = [0.01, 500, 1000, 2500, 5000, 10000, 20000]
 # entfernungMin besser in Abhaengigkeit von entfernungMax definieren? Also Listenelement Index [-1]?
 entfernungMin = [0, 500, 1000, 2500, 5000, 10000]
 # ausgabePunkte = str(eingabeMittelpunkt) + str(entfernungMax)
 koordinatensystem = arcpy.Describe(eingabePunkte).spatialReference
 auswahlBufferPunkte = r'memory\ausgabePunkte'
-netzwerk = 'Network'
-ODMatrix = 'OD Cost Matrix'
-wiederstand = 'DriveTime'
-accumulate_attribute_name = 'Index'
+startpunktePLZsubset = r'memory\startpunktePLZsubset'
+netzwerk = r'C:\Users\Matthias\Documents\UNIGIS\Masterthesis\GIS_Projekt\eingangsDaten.gdb\Network\Network_ND'
+# ksotenmatrixLayer muss im gleichen Verzeichnis wie Netzwerk stecken!
+kostenmatrixLayer = os.path.join(eingabeGDB, 'ODCostMatrix')
+wiederstand = 'Driving Distance'
+akkumiliertesAttribut = ['Index', 'Length', 'Time']
 ausgabeLayer = r'memory\temp_ausgabeLayer'
 ergebnisseFC = os.path.join(ausgabeGDB, 'ergebnisse')
 temp_ausgabeStatistic = r'memory\temp_augabeStatistic'
 ausgabeFelder = ['meanWS'] # toDo nur meanWS?
 statistikTyp = 'SUM'
+startpunkte = r'memory\startpunkte'
 
 # Funktionen
 
-#
+# Funktion gibt alle vorhanden Werte in einer Spalte zurueck
 def unique_values(table, field):  ##uses list comprehension
     with arcpy.da.SearchCursor(table, [field]) as cursor:
-        return sorted({row[0] for row in cursor})
+        return {row[0] for row in cursor}
+# Funktion gibt die Anzahl der Zeilen einer Auswahl zurueck. Bei Count = 0 ist die Auswahl leer.
+def auswahlPruefen(auswahl):
+    count = 0
+    zeilen = arcpy.SearchCursor(auswahl)
+    for zeile in zeilen:
+        count += 1
+    return count
+# gibt die Feldnamen einer Tabelle zurueck
+def namen_abfragen (featureclass):
+    field_names = [f.name for f in arcpy.ListFields(featureclass)]
+    return (field_names)
 
 
 # https://pro.arcgis.com/de/pro-app/tool-reference/network-analyst/make-od-cost-matrix-layer.htm
 # eventuell könnte man den Sicherheitsindex als Hirarchy Attribut verwenden. Dann werden sichere Straßen bevorzugt
-# arcpy.na.MakeODCostMatrixLayer(netzwerk, ODMatrix, wiederstand, '', '', accumulate_attribute_name, '', '', '', '')
+kostenmatrixObjekt = arcpy.na.MakeODCostMatrixLayer(netzwerk, kostenmatrixLayer, 'Index', None, None, akkumiliertesAttribut, None, None, None, None, 'NO_LINES')
+# Output von Kostenmatrix erstellen abfragen
+layerObjekt = kostenmatrixObjekt.getOutput(0)
+# Alle Sublayer Namen abfragen
+sublayerNamen = arcpy.na.GetNAClassNames(layerObjekt)
+print(sublayerNamen)
+# Namen der sublayer Abfragen und speichern
+origins_layerName = sublayerNamen['Origins']
+destinations_layerName = sublayerNamen['Destinations']
+linien_layerName = sublayerNamen['ODLines']
+arcpy.na.AddFieldToAnalysisLayer(layerObjekt, linien_layerName, 'meanWS', 'DOUBLE', '', '', '', 'meanWiederstand')
 # leere Ausgabe erstellen um die Ergebnisse zu sammeln und mit Insert Cursor zu befuellen
-ergebnisseFC = arcpy.CreateFeatureclass_management(ausgabeGDB, 'ergebnisse', '', '', '', '', '', '', '', '', '', '')
-
-# cursor erstellen um durch die Zielorte zu iterieren
-zeigerZielorte = arcpy.da.SearchCursor(zielorte, '*' )
+# ergebnisseFC = arcpy.CreateFeatureclass_management(ausgabeGDB, 'ergebnisse', '', '', '', '', '', '', '', '', '', '')
+ergebnisDF = pd.DataFrame(columns=['identifier', 'meanIndexArea', 'medianIndexArea','verarbeitetPunkte'])
 
 #try:
+
 # iteration durch alle Unistandorte
-for mittelpunkt in zeigerZielorte:
-    #Name UniStandort abfragen fuer spateren Identifier
-    mittelpunktName = mittelpunkt.getValue(['Name'])
-    # UniStandort als Ziel in NW Layer importieren
-    arcpy.na.AddLocations(ODMatrix, 'destinations', mittelpunkt, '', '', 'clear', 'snap', '', '', '')
+
+for mittelpunkt in listeZielorte:
+    mittelpunktName = mittelpunkt
+    arcpy.na.AddLocations(layerObjekt, destinations_layerName, zielorteTV,'','')
     print('Zielort '+str(mittelpunktName) + ' hinzugefuegt')
     # iteration durch alle Abstandsstreifen (Ringe)
     Zaehler = 1
     while Zaehler < len(distanzenListe):
-        print('Verarbeitungsrunde' + str(Zaehler))
-        obereGrenze = distanzenListe[Zaehler]
-        untereGrenze = distanzenListe[Zaehler-1]
-        arcpy.SelectLayerByLocation_management(eingabePunkte, 'within_a_distance', mittelpunkt, obereGrenze, 'new_selection', '')
+        print('Verarbeitungsrunde ' + str(Zaehler))
+        obereGrenze = (str(distanzenListe[Zaehler]) + " Meters")
+        untereGrenze = (str(distanzenListe[Zaehler-1]) + " Meters")
+        #arcpy.Buffer_analysis(mittelpunkt, temp_buffer, obereGrenze)
+        temp_selection = arcpy.SelectLayerByLocation_management(eingabePunkte, 'within_a_distance', mittelpunkt, obereGrenze, 'new_selection', '')
+        #bufferSelection = arcpy.SelectLayerByLocation_management(eingabePunkte, 'intersect', temp_buffer)
+        #arcpy.CopyFeatures_management(temp_selection,'testPuffer500')
         print('Obere Auswahl getroffen:' + str(obereGrenze))
-        arcpy.SelectLayerByLocation_management(eingabePunkte, 'within_a_distance', mittelpunkt, untereGrenze, 'remove_from_current_selection', '')
+        #try:
+        reduzierteAuswahl = arcpy.SelectLayerByLocation_management(temp_selection, 'within_a_distance', mittelpunkt, untereGrenze, 'remove_from_current_selection', '')
+        arcpy.CopyFeatures_management(reduzierteAuswahl, startpunkte)
         print('Untere Auswahl entfernt:' + str(untereGrenze))
+        #except:
+            arcpy.CopyFeatures_management(temp_selection, startpunkte)
+            print('Untere Auswahl fuer ' + str(untereGrenze) +' enthaelt keine Punkte')
         # abfrage, ob denn Punkte ausgewaehlt wurden oder ob die Auswahl leer ist
-        beschreibung = arcpy.Describe(eingabePunkte)
-        if len(beschreibung.FIDSet) > 0:  # layer has selection
+        if auswahlPruefen(startpunkte) == 0:
+            print('Keine Punkte fuer ' + str(mittelpunktName) + ' zwischen ' + str(untereGrenze) + ' und ' + str(
+                obereGrenze) + ' vorhanden.')
+        else:
             print('Die Auswahl enthaelt Punkte')
-            arcpy.CopyFeatures_management(eingabePunkte, auswahlBufferPunkte)
-            # erstellen einer Liste mit allen vorkommenden PLZ (unique values) in der Auswahl
-            plzListe = [unique_values(auswahlBufferPunkte, 'eindeutigePLZ')]
+            # Namen der vorhandenen Felder ausgeben
+            # print(namen_abfragen(startpunkte))
+            #  erstellen einer Liste mit allen vorkommenden PLZ (unique values) in der Auswahl
+            plzListe = unique_values(startpunkte, 'F02_PLZ_csv_eindeutigePLZ')
             print('Die PLZ '+str(plzListe)+' werden verarbeitet')
             # iteration durch alle Postleitzahlen
-            for PLZ in plzListe:
-                arcpy.SelectLayerByAttribute_management(auswahlBufferPunkte, 'new_selection', " [eindeutigePLZ] = PLZ", '')
-                auswahlZaehler = arcpy.GetCount_management(auswahlBufferPunkte)
-                if auswahlZaehler > 0:
-                    print('In der Auswahl von ' + str(mittelpunktName) + str(PLZ) + ' im Abstand von ' + str(untereGrenze) + ' bis ' + str(obereGrenze) + ' sind ' + str(auswahlZaehler) + ' Punkte enhalten')
+            # todo NULL skippen oder vorher raus nehmen
+            for PLZvariable in plzListe:
+                print('Postleitzahl ' +str(PLZvariable) + ' wird verarbeitet')
+                # Abfrage erstellen welche Features die aktuell gewaehlte PLZ haben
+                schluesselPLZ = 'F02_PLZ_csv_eindeutigePLZ'
+                where_clause = '{} = {}'.format(arcpy.AddFieldDelimiters(startpunkte, schluesselPLZ), PLZvariable)
+                arcpy.Select_analysis(startpunkte, startpunktePLZsubset, where_clause)
+                auswahlZaehler = arcpy.GetCount_management(startpunktePLZsubset)[0]
+                if int(auswahlZaehler) > 0:
+                    print('In der Auswahl von ' + str(mittelpunktName) + '_' + str(PLZvariable) + ' im Abstand von ' + str(untereGrenze) + ' bis ' + str(obereGrenze) + ' sind ' + str(auswahlZaehler) + ' Punkte enhalten.')
                     # laut dokumentation  wird das Werkzeug nur auf die Auswahl ausgefuehrt
                     # https://pro.arcgis.com/de/pro-app/tool-reference/data-management/select-layer-by-attribute.htm
                     # jetzt wirds kompliziert: Ausführen der OD CostMatrix und schreiben der Ergebnisse in Liste
-                    arcpy.na.AddLocations(ODMatrix, 'origins', auswahlBufferPunkte, '', '', 'clear', 'snap', '', '', '')
-                    # den NA Layer loesen
-                    arcpy.na.Solve(ODMatrix)
+                    # Param4 Search Tolerance: erlaubter Offset zum Netzwerk?
+                    arcpy.na.AddLocations(layerObjekt, origins_layerName, startpunktePLZsubset, '', '10 Meters', '', '', '', 'clear', '')
+                    # den NA Layer berechnen
+                    arcpy.na.Solve(layerObjekt)
                     # Layer Lines auswaehlen
-                    Selection = arcpy.SelectData_management(ODMatrix, "Lines")
+                    Selection = arcpy.SelectData_management(layerObjekt, linien_layerName)
+                    # Selektion als neuen Layer speichern
+                    arcpy.MakeFeatureLayer_management(Selection, ausgabeLayer)
                     # Kopie erstellen
-                    arcpy.CopyFeatures_management(ODMatrix, ausgabeLayer)
-                    # berechnung durchschnittlicher Wiederstand
-                    arcpy.AddField_management(ausgabeLayer, 'meanWS', 'DOUBLE', '', '', '', 'meanWiederstand', '', '', '')
-                    arcpy.CalculateFields_management(ausgabeLayer, 'PYTHON3', ['meanWS', 'Total_INDEX'/'Total_Length'])
-                    # Feldstatistik auf durchschnittlichen Wiederstand anwenden
-                    feldstatistik = arcpy.SummarizeAttributes_geoanalytics(ausgabeLayer, temp_ausgabeStatistic, [[ausgabeFelder, statistikTyp]])
+                    # print(namen_abfragen(ausgabeLayer))
+                    # Ueber den Umweg numpyArray erstellen wird ein Dataframe generiert.
+                    # Dieser enhaelt Length, Index und Time sowie den mittleren Wiederstand als Spalte.
+                    arr = arcpy.da.TableToNumPyArray(ausgabeLayer, ('Total_Length', 'Total_Index', 'Total_Time', 'meanWS'))
+                    df = pd.DataFrame(arr)
+                    df['meanWS']=(df['Total_Index']/df['Total_Length'])
+                    # print(df)
+                    mittelwert = np.mean(df['meanWS'])
+                    median = np.median(df['meanWS'])
+                    print('Der gemittelte Index dieser Punkte ist ' +str(mittelwert))
                     # identifier fuer spaetere Zuordnung basteln
-                    identifier = str(PLZ)+'_' + str(obereGrenze)+ '_' +str(mittelpunktName)
-                    # cursor erstellen um Ergebnisse in einer Datei zu speichern
-                    zeigerErgebnisse = arcpy.da.InsertCursor(ergebnisseFC, feldstatistik)
-                    # Ergebnisse in Tabelle schreiben
-                    felder_ic_cursor = [feldstatistik, ausgabeFelder, identifier]
-                    new_row = [felder_ic_cursor]
-                    zeigerErgebnisse.insertRow(new_row)
-                    del new_row
+                    identifier = str(PLZvariable)+'_' + str(obereGrenze)+ '_' +str(mittelpunktName)
+
+                    # Pass a series in append() to append a row in dataframe
+                    ergebnisDF = ergebnisDF.append(pd.Series([identifier, mittelwert, median, auswahlZaehler], index=ergebnisDF.columns), ignore_index=True)
+                    print(ergebnisDF)
+
                     del identifier
                 else:
-                    print('Die Auswahl von ' + str(mittelpunktName) + str(PLZ) + ' im Abstand von ' + str(untereGrenze) + ' bis ' + str(obereGrenze) + ' ist mit [' + str(auswahlZaehler) + '] Punkten leer')
-        else:
-            print('Keine Punkte fuer ' + str(mittelpunktName) + ' zwischen ' + str(untereGrenze) + ' und ' + str(obereGrenze) + ' vorhanden.')
-    Zaehler = Zaehler+1
+                    print('Die Auswahl von ' + str(mittelpunktName) + str(PLZvariable) + ' im Abstand von ' + str(untereGrenze) + ' bis ' + str(obereGrenze) + ' ist mit [' + str(auswahlZaehler) + '] Punkten leer')
+        #ergebnisDF als .csv speichern
+        Zaehler = Zaehler+1
 #except:
     print('Das lief schief')
+
 
 
